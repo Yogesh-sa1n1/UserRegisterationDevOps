@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>User Registration</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="popup"></div>
+
+  <form id="userForm" enctype="multipart/form-data" onsubmit="submitForm(event)">
+    <h2>User Registration</h2>
+
+    <label>Name:</label><br>
+    <input type="text" name="name" placeholder="Enter your name" required><br>
+
+    <label>Email:</label><br>
+    <input type="email" name="email" placeholder="Enter your email" required><br>
+
+    <label>Phone:</label><br>
+    <input type="text" name="phone" placeholder="Enter your phone" required><br>
+
+    <label>Password:</label><br>
+    <input type="password" name="password" placeholder="Enter password" required><br>
+
+    <label>Photo:</label><br>
+    <input type="file" name="photo" accept="image/*" required><br>
+
+    <button type="submit">Save</button>
+  </form>
+
+  <script src="script.js"></script>
+</body>
+</html>
