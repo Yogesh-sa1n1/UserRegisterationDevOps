@@ -1,152 +1,75 @@
-name: CI / Build / Terraform Deploy
+name: Provision EC2 and Deploy Website
 
-on:
+on: 
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-
-env:
-  # Change defaults if you want (or set them via repo secrets)
-  DOCKER_REGISTRY: docker.io             # e.g. ghcr.io or docker.io
-  DOCKER_IMAGE_NAME: ${{ github.repository_owner }}/$({{ github.repository }} | sed 's/.*/${{ github.repository }}' ) # placeholder, overwritten below
-  DB_SERVICE_NAME: db                   # Name of your DB service from docker-compose (default: "db")
-  DB_ROOT_PASSWORD: root123                # only for local integration-test container use; override in secrets if needed
+    branches:
+      - main
 
 jobs:
-  test:
-    name: Run unit + integration tests
+  setupInfra:
     runs-on: ubuntu-latest
-    services: {}
+    outputs:
+      ec2_ip: ${{steps.tf.outputs.ec2_ip}}
+      ec2_key: ${{steps.tf.outputs.ec2_key}}
+
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Use Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install dependencies
-        working-directory: .
-        run: |
-          npm ci
-
-      - name: Run unit tests
-        run: |
-          npm test
-
-      # Start docker-compose if you have integration tests that rely on containers
-      - name: Set up docker-compose services (integration)
-        if: ${{ fileExists('docker-compose.yml') || fileExists('docker-compose.yaml') }}
-        run: |
-          # Make sure docker-compose v2 (docker compose) is available
-          docker compose version || (sudo apt-get update && sudo apt-get install -y docker-compose-plugin)
-          # Bring up defined services (in detached mode)
-          docker compose up -d
-          # Wait for DB to be up (polling)
-          for i in $(seq 1 30); do
-            if docker compose exec -T ${DB_SERVICE_NAME} mysqladmin ping -h"127.0.0.1" -P3306 --silent; then
-              echo "DB up"
-              break
-            fi
-            echo "Waiting for DB..."
-            sleep 2
-          done
-
-      - name: Load init.sql into DB (integration)
-        if: ${{ fileExists('init.sql') }}
-        run: |
-          # Adjust DB user/password/host/port to match your docker-compose DB service config
-          # This assumes the DB service exposes mysql client and the container name is the same as DB_SERVICE_NAME
-          # If your DB image is mysql and root password is as below:
-          cat init.sql | docker compose exec -T ${DB_SERVICE_NAME} sh -c "mysql -u root -p${DB_ROOT_PASSWORD}"
-        env:
-          DB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD || env.DB_ROOT_PASSWORD }}
-
-      - name: Run integration tests
-        if: ${{ always() && (fileExists('test/integration') || fileExists('integration')) }}
-        run: |
-          # run any integration tests here (adjust path to your tests)
-          npm run test:integration || true
-
-      - name: Tear down docker-compose (cleanup)
-        if: ${{ fileExists('docker-compose.yml') || fileExists('docker-compose.yaml') }}
-        run: docker compose down -v
-
-  build-and-push:
-    name: Build Docker image & push
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU (for multi-arch builds)
-        uses: docker/setup-qemu-action@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Log in to container registry
-        uses: docker/login-action@v2
-        with:
-          registry: ${{ env.DOCKER_REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}:latest
-            ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}:${{ github.sha }}
-
-      - name: Output image tag
-        run: echo "IMAGE=${{ env.DOCKER_REGISTRY }}/${{ github.repository }}:${{ github.sha }}" >> $GITHUB_OUTPUT
-
-  terraform:
-    name: Terraform plan & apply
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    environment: production   # optional - requires environment protection to apply
-    defaults:
-      run:
-        working-directory: ./terraform   # change if your TF code is somewhere else
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.5.7
+        uses: hashicorp/setup-terraform@v3
 
-      - name: Configure AWS credentials
-        if: ${{ secrets.AWS_ACCESS_KEY_ID && secrets.AWS_SECRET_ACCESS_KEY }}
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+      - name: Terraform Init
+        run: terraform init 
+        env: 
+          AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
+          AWS_SECRET_ACCESS_KEY: ${{secrets.AWS_SECRET_ACCESS_KEY}}
+          AWS_DEFAULT_REGION: us-east-1
 
-      - name: Terraform init
-        run: terraform init -input=false
-
-      - name: Terraform validate
-        run: terraform validate
-
-      - name: Terraform plan
-        id: tfplan
-        run: terraform plan -out=tfplan.binary -input=false
-
-      - name: Terraform apply
-        if: ${{ github.ref == 'refs/heads/main' }}
-        run: terraform apply -input=false -auto-approve tfplan.binary
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
         env:
-          # Add any TF_VAR_* variables you need (set values as repo secrets)
-          TF_VAR_image: ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}:${{ github.sha }}
-          # Example: TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          AWS_ACCESS_KEY_ID: ${{secrets.AWS_ACCESS_KEY_ID}}
+          AWS_SECRET_ACCESS_KEY: ${{secrets.AWS_SECRET_ACCESS_KEY}}
+          AWS_DEFAULT_REGION: us-east-1
+
+      - name: Get Terraform outputs
+        id: tf
+        run: |
+          echo "ec2_ip=${terraform output -raw ec2_public_ip}" >> $GITHUB_OUTPUT
+          echo "ec2_key<<EOF" >> $GITHUB_OUTPUT
+          terraform output -raw ec2_private_key >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+
+  deploy:
+    needs: setupInfra
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Deploy using Docker Compose on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ needs.setupInfra.outputs.ec2_ip }}
+          username: ubuntu
+          key: ${{ needs.setupInfra.outputs.ec2_key }}
+          script: |
+            # Wait until Docker is ready
+            until sudo docker info >/dev/null 2>&1; do
+                echo "Waiting for Docker daemon..."
+                sleep 10
+            done
+
+
+            # Pull latest changes from repo
+            git pull origin main
+
+            # Build images and start containers
+            sudo docker compose up 
+
+            # Optional: clean unused images and containers
+            sudo docker image prune -f
+     
