@@ -7,7 +7,7 @@ resource "random_id" "suffix"{
 }
 
 resource "aws_security_group" "securityGroup"{
-    name= "GithubAction-${random_id.suffic.hex}"
+    name= "GithubAction-${random_id.suffix.hex}"
     description = "allow ssh access and tcp"
 
     # Ingress rules using for_each
