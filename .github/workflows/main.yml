@@ -64,12 +64,11 @@ jobs:
             done
 
 
-            # Pull latest changes from repo
-            git pull origin main
+            git init
+            git remote add origin https://github.com/Yogesh-sa1n1/UserRegisterationDevOps.git
+            git fetch
+            git reset --hard origin/main
 
-            # Build images and start containers
-            sudo docker compose up 
-
-            # Optional: clean unused images and containers
-            sudo docker image prune -f
+            # Run Docker Compose (build and start containers)
+            sudo docker-compose up -d --build
      
